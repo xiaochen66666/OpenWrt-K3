@@ -177,11 +177,11 @@ jobs:
         echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
         
         cat <<EOF > release.txt
-        🚀 **ImmortalWrt K3 自动编译版**
+        🚀 **ImmortalWrt x86_64 自动编译版**
         
         ### 📦 固件基础信息
         - 💻 **编译平台**: GitHub Actions
-        - 🖥️ **适用架构**: K3
+        - 🖥️ **适用架构**: x86_64
         - 🐧 **内核版本**: ${KERNEL_VER}
         - 📅 **编译时间**: ${BUILD_TIME}
         
