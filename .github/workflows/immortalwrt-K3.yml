@@ -152,7 +152,7 @@ jobs:
         KERNEL_VER=$(cat *.manifest | grep "^kernel" | head -n 1 | cut -d- -f2 | tr -d ' ')
         echo "KERNEL_VER=$KERNEL_VER" >> $GITHUB_ENV
         shopt -s extglob
-        rm -rf !(config.buildinfo|*.manifest|*squashfs-combined.img.gz|*squashfs-combined-efi.img.gz)
+        rm -rf !(config.buildinfo|*.manifest|*phicomm_k3-squashfs.trx)
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
     - name: 上传固件到 Artifacts
@@ -177,11 +177,11 @@ jobs:
         echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
         
         cat <<EOF > release.txt
-        🚀 **ImmortalWrt x86_64 自动编译版**
+        🚀 **ImmortalWrt bcm53xx 自动编译版**
         
         ### 📦 固件基础信息
         - 💻 **编译平台**: GitHub Actions
-        - 🖥️ **适用架构**: x86_64
+        - 🖥️ **适用架构**: bcm53xx
         - 🐧 **内核版本**: ${KERNEL_VER}
         - 📅 **编译时间**: ${BUILD_TIME}
         
