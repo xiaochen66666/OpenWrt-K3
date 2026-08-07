@@ -4,7 +4,7 @@
 # Author: trainSu
 #=================================================
 
-name: 编译 OpenWrt 固件
+name: 编译 immortalwrt 固件
 
 on:
   repository_dispatch:
@@ -17,7 +17,7 @@ concurrency:
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: master
+  REPO_BRANCH: openwrt-23.05
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
