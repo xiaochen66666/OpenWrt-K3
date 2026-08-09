@@ -3,10 +3,16 @@ name: ImmortalWrt-K3 构建器
 on:
   repository_dispatch:
   workflow_dispatch:
+    inputs:
+      repo_branch:
+        description: '选择或输入要编译的 ImmortalWrt 版本 (例如: v24.10.6, v23.05.7, master)'
+        required: true
+        default: 'v24.10.6'
+        type: string
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: v23.05.7
+  REPO_BRANCH: ${{ github.event.inputs.repo_branch || 'v24.10.6' }}
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
@@ -49,8 +55,9 @@ jobs:
     - name: 克隆源代码
       working-directory: /workdir
       run: |
+        echo "正在克隆版本: ${{ env.REPO_BRANCH }}"
         df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH immortalwrt
+        git clone $REPO_URL -b ${{ env.REPO_BRANCH }} immortalwrt
         ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
 
     - name: 加载自定义 feeds
@@ -106,7 +113,7 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
-        name: ImmortalWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        name: ImmortalWrt_bin_${{ env.REPO_BRANCH }}${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: immortalwrt/bin
 
     - name: 整理文件
@@ -122,7 +129,7 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: ImmortalWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        name: ImmortalWrt_firmware_${{ env.REPO_BRANCH }}${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
     - name: 生成发布标签
