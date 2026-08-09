@@ -1,27 +1,17 @@
-#=================================================
-# Description: Build OpenWrt using GitHub Actions
-# License: MIT
-# Author: trainSu
-#=================================================
-
-name: 编译 immortalwrt 固件
+name: ImmortalWrt-K3 构建器
 
 on:
   repository_dispatch:
-    types: [Source Code Update]
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: true
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: v24.10.6
+  REPO_BRANCH: v23.05.7
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
+  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
@@ -29,16 +19,14 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-    - name: 检查清理前的磁盘空间
-      run: |
-        echo "检查清理前的磁盘空间"
-        echo "=============================================================================="
-        df -hT
-        echo "=============================================================================="
+    - name: 检出代码
+      uses: actions/checkout@main
 
-    - name: 极限清理磁盘空间
+    - name: 释放磁盘空间（Ubuntu）
       uses: jlumbroso/free-disk-space@main
       with:
         tool-cache: true
@@ -47,198 +35,126 @@ jobs:
         haskell: true
         large-packages: true
         docker-images: true
-        swap-storage: false
-        
-    - name: 手动创建 Swap 虚拟内存
-      run: |
-        sudo swapoff /swapfile || true
-        sudo rm -f /swapfile
-        sudo fallocate -l 8G /swapfile
-        sudo chmod 600 /swapfile
-        sudo mkswap /swapfile
-        sudo swapon /swapfile
+        swap-storage: true
 
-    - name: 检查清理后的磁盘空间
-      run: |
-        echo "清理并挂载 Swap 完成"
-        echo "=============================================================================="
-        df -hT
-        echo "=============================================================================="
-
-    - name: 检出仓库代码
-      uses: actions/checkout@v4
-
-    - name: 初始化编译环境
+    - name: 初始化环境
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        curl -fsSL https://build-scripts.immortalwrt.org/init_build_environment.sh | sudo -E bash
-        sudo timedatectl set-timezone "$TZ"
-        sudo chown $USER:$GROUPS $GITHUB_WORKSPACE
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install bzip2 g++ gawk gcc git glibc-source libncurses-dev make python3-pyelftools
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
 
-    - name: 克隆 OpenWrt 源代码
-      working-directory: ./
+    - name: 克隆源代码
+      working-directory: /workdir
       run: |
-        git clone --depth=20 $REPO_URL -b $REPO_BRANCH openwrt
+        df -hT $PWD
+        git clone $REPO_URL -b $REPO_BRANCH immortalwrt
+        ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
 
-    - name: 加载自定义 feeds 配置 (diy-part1.sh)
+    - name: 加载自定义 feeds
       run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF immortalwrt/feeds.conf.default
         chmod +x $DIY_P1_SH
-        cd openwrt
+        cd immortalwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
-
-    - name: 更新并安装 feeds
-      working-directory: ./openwrt
+                    
+    - name: 更新 feeds
       run: |
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-
-    - name: 加载自定义配置 (diy-part2.sh)
+        cd immortalwrt && ./scripts/feeds update -a
+        
+    - name: 安装 feeds
       run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        cd immortalwrt && ./scripts/feeds install -a
+        rm -rf feeds/packages/lang/golang
+        git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
+       
+    - name: 加载自定义配置
+      run: |
+        [ -e files ] && mv files immortalwrt/files
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE immortalwrt/.config
         chmod +x $DIY_P2_SH
-        cd openwrt
+        cd immortalwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    - name: 缓存核心工具链 (Toolchain)
-      id: cache-toolchain
-      uses: actions/cache@v4
-      with:
-        path: |
-          openwrt/staging_dir/host*
-          openwrt/staging_dir/toolchain-*
-          openwrt/build_dir/host*
-          openwrt/build_dir/toolchain-*
-        key: ${{ runner.os }}-toolchain-${{ hashFiles('openwrt/include/**', 'openwrt/tools/**', 'openwrt/toolchain/**') }}
-        restore-keys: |
-          ${{ runner.os }}-toolchain-
-
-    - name: 修复被缓存的底层构建时间戳
-      if: steps.cache-toolchain.outputs.cache-hit == 'true'
-      run: |
-        echo "正在施展时间戳欺骗魔法，骗过 OpenWrt 的 Make 系统..."
-        find openwrt/staging_dir/ -type f -exec touch {} +
-        find openwrt/build_dir/ -type f -exec touch {} +
-
-    - name: 下载编译所需的软件包
+    - name: 下载软件包
       id: package
       run: |
-        cd openwrt
+        cd immortalwrt
         make defconfig
-        make download -j16 || make download -j1 V=s
+        make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: 编译 OpenWrt 固件
+    - name: 编译固件
       id: compile
       run: |
-        cd openwrt
-        echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 V=s
+        cd immortalwrt
+        echo -e "$(nproc) 线程编译"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: 检查编译后的空间使用情况
+    - name: 检查磁盘空间使用情况
+      if: (!cancelled())
       run: df -hT
 
-    - name: 整理编译输出的固件文件
-      if: env.UPLOAD_FIRMWARE == 'true'
-      run: |
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
-        KERNEL_VER=$(cat *.manifest | grep "^kernel" | head -n 1 | cut -d- -f2 | tr -d ' ')
-        echo "KERNEL_VER=$KERNEL_VER" >> $GITHUB_ENV
-        shopt -s extglob
-        rm -rf !(config.buildinfo|*.manifest|*phicomm_k3-squashfs.trx)
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-
-    - name: 上传固件到 Artifacts
-      if: env.UPLOAD_FIRMWARE == 'true'
-      uses: actions/upload-artifact@v4
+    - name: 上传 bin 目录
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        name: ImmortalWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: immortalwrt/bin
+
+    - name: 整理文件
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        cd immortalwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: 上传固件目录
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: ImmortalWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
-    - name: 生成发布版本标签与详细日志
+    - name: 生成发布标签
       id: tag
-      if: env.UPLOAD_RELEASE == 'true'
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        RELEASE_TAG=$(date +"%Y.%m.%d-%H%M")
-        BUILD_TIME=$(date +"%Y-%m-%d %H:%M")
-        KERNEL_VER=${{ env.KERNEL_VER }}
-        [ -z "$KERNEL_VER" ] && KERNEL_VER="未知内核"
-        COMMIT_AUTHOR=$(git -C openwrt log -1 --pretty=format:"%an")
-        COMMIT_DATE=$(git -C openwrt log -1 --pretty=format:"%cd" --date=short)
-        COMMIT_MESSAGE=$(git -C openwrt log -1 --pretty=format:"%s")
-        COMMIT_HASH=$(git -C openwrt log -1 --pretty=format:"%h")
-        echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
-        
-        cat <<EOF > release.txt
-        🚀 **ImmortalWrt bcm53xx 自动编译版**
-        
-        ### 📦 固件基础信息
-        - 💻 **编译平台**: GitHub Actions
-        - 🖥️ **适用架构**: bcm53xx
-        - 🐧 **内核版本**: ${KERNEL_VER}
-        - 📅 **编译时间**: ${BUILD_TIME}
-        
-        ### 🧊 主源码最后更新快照
-        - 👤 **提交作者**: ${COMMIT_AUTHOR}
-        - 🕒 **提交时间**: ${COMMIT_DATE}
-        - 🔖 **更新摘要**: ${COMMIT_MESSAGE}
-        - 🏷️ **代码哈希**: [${COMMIT_HASH}](${{ env.REPO_URL }}/commit/${COMMIT_HASH})
-        
-        ### 📝 上游引擎近期动态 (Top 15)
-        EOF
-        
-        git -C openwrt log -15 --pretty=format:"- %s [%h]" >> release.txt
-        
-        cat <<EOF >> release.txt
-        
-        
-        ---
-        🤖 *此固件由 GitHub Actions 全自动拉取最新源码构建*
-        EOF
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")-${{ env.REPO_BRANCH }}" >> $GITHUB_OUTPUT
+        touch release.txt
+        [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
+        echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: 发布固件到 Releases
-      if: env.UPLOAD_RELEASE == 'true'
+    - name: 上传固件到 Release
+      uses: softprops/action-gh-release@master
+      if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
 
-    - name: 清理旧的 Workflow 运行记录
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        echo "开始清理旧的 Workflow 运行记录..."
-        runs=$(gh run list -w "${{ github.workflow }}" --status completed -R ${{ github.repository }} --limit 100 --json databaseId -q '.[].databaseId' | tail -n +4)
-        if [ -n "$runs" ]; then
-          for run in $runs; do
-            gh run delete "$run" -R ${{ github.repository }} || true
-          done
-        else
-          echo "没有需要清理的旧记录。"
-        fi
+    - name: 删除工作流运行记录
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        retain_days: 0
+        keep_minimum_runs: 2
 
-    - name: 清理旧的 Releases 版本
-      if: env.UPLOAD_RELEASE == 'true'
+    - name: 删除旧版本 Release
+      uses: dev-drprasad/delete-older-releases@master
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 3
+        delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        echo "开始清理旧的 Release 和 Tag..."
-        tags=$(gh release list -R ${{ github.repository }} --limit 100 --json tagName -q '.[].tagName' | tail -n +4)
-        if [ -n "$tags" ]; then
-          for tag in $tags; do
-            echo "正在精准爆破旧版本: $tag"
-            gh release delete "$tag" -R ${{ github.repository }} --cleanup-tag -y || true
-          done
-        else
-          echo "没有需要清理的旧版本。"
-        fi
